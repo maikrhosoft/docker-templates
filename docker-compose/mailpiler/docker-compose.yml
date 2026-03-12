@@ -18,6 +18,8 @@ services:
     volumes:
       - /docker/mailpiler/data/mysql:/var/lib/mysql
       - /docker/mailpiler/piler.cnf:/etc/mysql/conf.d/piler.cnf:ro
+    networks:
+      backend:
 
   manticore:
     image: manticoresearch/manticore:14.1.0
@@ -26,12 +28,16 @@ services:
     volumes:
       - /docker/mailpiler/manticore.conf:/etc/manticoresearch/manticore.conf:ro
       - /docker/mailpiler/data/manticore:/var/lib/manticore
+    networks:
+      backend:
 
   memcached:
     image: memcached:latest
     container_name: mailpiler-memcached
     restart: unless-stopped
     command: -m 64
+    networks:
+      backend:
 
   piler:
     image: sutoj/piler:${PILER_VERSION:-1.4.8}
@@ -61,6 +67,7 @@ services:
       - memcached
       - manticore
     networks:
+      backend:
       default:
         ipv4_address: ${PILER_IPV4}
     # Falls externer SMTP-Ingest benoetigt wird, Port 25 oeffnen:
@@ -71,3 +78,7 @@ networks:
   default:
     name: mvl
     external: true
+
+  backend:
+      name: mailpiler_intern
+      external: true
