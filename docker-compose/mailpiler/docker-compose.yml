@@ -1,0 +1,73 @@
+services:
+  mysql:
+    image: mariadb:12.0.2
+    container_name: mailpiler-mysql
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - dac_override
+      - setuid
+      - setgid
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - /docker/mailpiler/data/mysql:/var/lib/mysql
+      - /docker/mailpiler/piler.cnf:/etc/mysql/conf.d/piler.cnf:ro
+
+  manticore:
+    image: manticoresearch/manticore:14.1.0
+    container_name: mailpiler-manticore
+    restart: unless-stopped
+    volumes:
+      - /docker/mailpiler/manticore.conf:/etc/manticoresearch/manticore.conf:ro
+      - /docker/mailpiler/data/manticore:/var/lib/manticore
+
+  memcached:
+    image: memcached:latest
+    container_name: mailpiler-memcached
+    restart: unless-stopped
+    command: -m 64
+
+  piler:
+    image: sutoj/piler:${PILER_VERSION:-1.4.8}
+    container_name: mailpiler
+    init: true
+    restart: unless-stopped
+    environment:
+      MANTICORE_HOSTNAME: manticore
+      MEMCACHED_HOSTNAME: memcached
+      MYSQL_HOSTNAME: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      PILER_HOSTNAME: ${PILER_HOSTNAME}
+      RT: "1"
+    volumes:
+      - /docker/mailpiler/data/piler-etc:/etc/piler
+      - /docker/mailpiler/data/piler-store:/var/piler/store
+    healthcheck:
+      test: ["CMD", "curl", "-s", "smtp://localhost/"]
+      interval: 20s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    depends_on:
+      - mysql
+      - memcached
+      - manticore
+    networks:
+      default:
+        ipv4_address: ${PILER_IPV4}
+    # Falls externer SMTP-Ingest benoetigt wird, Port 25 oeffnen:
+    # ports:
+    #   - "25:25"
+
+networks:
+  default:
+    name: mvl
+    external: true
