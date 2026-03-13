@@ -18,8 +18,8 @@ services:
       SEARCH_HOST: ${SEARCH_HOST}
       SEARCH_PORT: ${SEARCH_PORT}
     volumes:
-      - ./data:/opt/mailarchiva/data
-      - ./logs:/opt/mailarchiva/logs
+      - /volume1/docker/mailarchiva/data:/opt/mailarchiva/data
+      - /volume1/docker/mailarchiva/logs:/opt/mailarchiva/logs
     networks:
       - default
       - bridge
@@ -33,7 +33,7 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - ./postgres:/var/lib/postgresql/data
+      - /volume1/docker/mailarchiva/postgres:/var/lib/postgresql/data
     networks:
       - default
 
@@ -47,7 +47,7 @@ services:
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
       plugins.security.disabled: ${OPENSEARCH_SECURITY_DISABLED}
     volumes:
-      - ./opensearch:/usr/share/opensearch/data
+      - /volume1/docker/mailarchiva/opensearch:/usr/share/opensearch/data
     networks:
       - default
 
@@ -64,8 +64,8 @@ services:
       DOVECOT_PASSWORD: ${DOVECOT_PASSWORD}
       DOVECOT_TLS_CN: ${DOVECOT_TLS_CN}
     volumes:
-      - ./dovecot/conf:/etc/dovecot
-      - ./dovecot/mail:/var/mail/vhosts
+      - /volume1/docker/mailarchiva/dovecot/conf:/etc/dovecot
+      - /volume1/docker/mailarchiva/dovecot/mail:/var/mail/vhosts
     networks:
       - bridge
 
