@@ -1,0 +1,63 @@
+services:
+
+  gitlab:
+    image: gitlab/gitlab-ce:17.9.1-ce.0
+    container_name: gitlab
+    hostname: ${GITLAB_HOSTNAME}
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url "${GITLAB_EXTERNAL_URL}"
+        # Absender fuer System-Mails (Notifications, Passwort-Resets etc.)
+        gitlab_rails['gitlab_email_from'] = "${GITLAB_EMAIL_FROM}"
+        # SSH-Container-Port, muss mit GITLAB_SSH_PORT uebereinstimmen
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT}
+        # NGINX hoert nur auf der IPvlan-IP, damit Port 80 auf dem Host nicht
+        # kollidiert und GitLab nicht auf 0.0.0.0 lauscht.
+        nginx['listen_addresses'] = ['${GITLAB_IPV4}']
+        # Optional: NGINX auch ueber IPv6 erreichbar machen
+        # nginx['listen_addresses'] = ['${GITLAB_IPV4}', '[::]']
+        # Eigene SMTP-Einstellungen hier eintragen (Beispiel):
+        # gitlab_rails['smtp_enable'] = true
+        # gitlab_rails['smtp_address'] = "smtp.example.com"
+        # gitlab_rails['smtp_port'] = 587
+        # gitlab_rails['smtp_user_name'] = "user"
+        # gitlab_rails['smtp_password'] = "pass"
+        # gitlab_rails['smtp_domain'] = "example.com"
+        # gitlab_rails['smtp_authentication'] = "login"
+        # gitlab_rails['smtp_enable_starttls_auto'] = true
+        # Backups
+        gitlab_rails['manage_backup_path'] = true
+        gitlab_rails['backup_path'] = "/var/opt/gitlab/backups"
+        gitlab_rails['backup_archive_permissions'] = 0644
+        gitlab_rails['backup_keep_time'] = 604800
+    volumes:
+      - ./config:/etc/gitlab
+      - ./logs:/var/log/gitlab
+      - ./data:/var/opt/gitlab
+      - ./backups:/var/opt/gitlab/backups
+    networks:
+      dockhand_ipvlan:
+        ipv4_address: ${GITLAB_IPV4}
+      gitlab-internal:
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:alpine-v17.9.1
+    container_name: gitlab-runner
+    restart: unless-stopped
+    depends_on:
+      - gitlab
+    volumes:
+      - ./runner/config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - gitlab-internal
+
+networks:
+  # Externes IPvlan-Netz "dockhand_ipvlan" - auf dem Docker-Host angelegt
+  # (Subnetz, Gateway, Parent-Interface sind dort konfiguriert).
+  dockhand_ipvlan:
+    external: true
+  # Internes Bridge-Netz fuer GitLab <-> Runner.
+  gitlab-internal:

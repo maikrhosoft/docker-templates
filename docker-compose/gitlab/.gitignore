@@ -1,0 +1,11 @@
+.env
+config/*
+!config/.gitkeep
+logs/*
+!logs/.gitkeep
+data/*
+!data/.gitkeep
+backups/*
+!backups/.gitkeep
+runner/config/*
+!runner/config/.gitkeep
