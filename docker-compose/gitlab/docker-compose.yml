@@ -1,7 +1,7 @@
 services:
 
   gitlab:
-    image: gitlab/gitlab-ce:17.9.1-ce.0
+    image: gitlab/gitlab-ce:19.0.3-ce.0
     container_name: gitlab
     hostname: ${GITLAB_HOSTNAME}
     restart: unless-stopped
@@ -42,7 +42,7 @@ services:
       - gitlab-internal
 
   gitlab-runner:
-    image: gitlab/gitlab-runner:alpine-v17.9.1
+    image: gitlab/gitlab-runner:alpine-v19.0.2
     container_name: gitlab-runner
     restart: unless-stopped
     depends_on:
