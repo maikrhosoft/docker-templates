@@ -48,7 +48,7 @@ gitlab/
    - `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT`: Host-Ports. Standard `2222`, `8080`, `8443`. Bei Port-Kollisionen anpassen.
 3. Synology **Reverse Proxy** anlegen (siehe unten).
 4. Firewall der Synology: Host-Ports `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT` freigeben.
-5. Optional SMTP-Block in `GITLAB_OMNIBUS_CONFIG` einkommentieren und Werte setzen.
+5. Optionale Konfigurationen (SMTP etc.) koennen nach dem Start ueber `gitlab-rails console` oder eine lokale `config/gitlab.rb` gesetzt werden (siehe unten).
 6. Stack starten — **Initial-Start dauert 3-10 Minuten**.
 
 ## Wichtige `.env` Einstellungen
@@ -95,6 +95,70 @@ cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
+
+## Optionale Konfigurationen (SMTP, etc.)
+
+Da der Stack per Dockhand direkt aus dem Git-Repo geladen wird, sind SMTP
+und andere erweiterte Einstellungen **nicht** Teil des compose-Files. Es
+gibt zwei Wege, sie zu setzen — **ohne das compose-File zu editieren**:
+
+### Variante 1: Per `gitlab-rails console` (interaktiv)
+
+Fuer schnelle Tests, dauerhafte Aenderungen per Reconfigure:
+
+```bash
+docker exec -it gitlab gitlab-rails console
+```
+
+Innerhalb der Console z. B. SMTP setzen:
+
+```ruby
+ActionMailer::Base.delivery_method = :smtp
+ActionMailer::Base.smtp_settings = {
+  address:              "smtp.example.com",
+  port:                 587,
+  user_name:            "user",
+  password:             "pass",
+  domain:               "example.com",
+  authentication:       "login",
+  enable_starttls_auto: true
+}
+ApplicationSetting.first.update!(email_from: "gitlab@example.com")
+exit
+```
+
+Danach `gitlab-ctl reconfigure` ausfuehren.
+
+### Variante 2: `gitlab.rb` als File mounten (fuer dauerhafte Aenderungen)
+
+1. Lokal `gitlab.rb` unter `config/gitlab.rb` anlegen (im selben Verzeichnis wie `docker-compose.yml`).
+2. Dort z. B. SMTP-Einstellungen eintragen:
+
+   ```ruby
+   gitlab_rails['smtp_enable'] = true
+   gitlab_rails['smtp_address'] = "smtp.example.com"
+   gitlab_rails['smtp_port'] = 587
+   gitlab_rails['smtp_user_name'] = "user"
+   gitlab_rails['smtp_password'] = "pass"
+   gitlab_rails['smtp_domain'] = "example.com"
+   gitlab_rails['smtp_authentication'] = "login"
+   gitlab_rails['smtp_enable_starttls_auto'] = true
+   ```
+
+3. In `docker-compose.yml` unter `volumes:` zusaetzlich mounten:
+
+   ```yaml
+   volumes:
+     - ./config:/etc/gitlab
+     - ./config/gitlab.rb:/etc/gitlab/gitlab.rb
+   ```
+
+   **Reihenfolge ist wichtig**: Der spezifische Mount kommt **nach** dem Verzeichnis-Mount, sonst wird er vom Verzeichnis-Mount ueberlagert.
+
+4. `docker compose up -d` und `docker exec -it gitlab gitlab-ctl reconfigure`.
+
+Die Datei `config/gitlab.rb` ist ueber Synology File Station oder jeden
+Texteditor editierbar, ohne das compose-File anzufassen.
 
 ## Status und Logs
 
