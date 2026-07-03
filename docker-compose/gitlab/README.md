@@ -1,11 +1,12 @@
-# GitLab (CE) + GitLab Runner (IPvlan + Synology Reverse Proxy)
+# GitLab (CE) + GitLab Runner (Bridge + Synology Reverse Proxy)
 
-Docker-Compose-Template fuer selbstgehostetes GitLab CE im **IPvlan** mit Synology **Reverse Proxy** fuer TLS-Termination.
+Docker-Compose-Template fuer selbstgehostetes GitLab CE im **Bridge-Modus** mit Synology **Reverse Proxy** fuer TLS-Termination.
 
 ## Was der Stack macht
 
-- **gitlab** haengt mit einer festen IP im Heimnetz (macvlan `dockhand_macvlan`) und ist ueber die Synology Reverse Proxy per FQDN erreichbar.
-- **gitlab-runner** laeuft in einem internen Bridge-Netz, das nur fuer die Kommunikation mit GitLab verwendet wird. Er holt CI/CD-Jobs ueber den Compose-internen DNS-Namen `gitlab` ab.
+- **gitlab** liegt in einem Bridge-Netz und exponiert HTTP/HTTPS/SSH ueber konfigurierbare Host-Ports.
+- **gitlab-runner** laeuft in einem **internen** Bridge-Netz ohne Host-Ports und holt CI/CD-Jobs ueber den Compose-internen DNS-Namen `gitlab` ab.
+- Der Synology Reverse Proxy spricht GitLab ueber die Host-Ports (Standard: `127.0.0.1:8080`) an und terminiert TLS.
 
 ## Verzeichnisstruktur
 
@@ -26,45 +27,16 @@ gitlab/
 ## Voraussetzungen
 
 - Docker + Compose Plugin auf der Synology (Container Manager) installiert.
-- Externes Netzwerk `dockhand_macvlan` als macvlan angelegt, Subnetz = Heimnetz, Gateway = Router (z. B. `192.168.178.1`).
 - Genug Ressourcen: GitLab CE benoetigt mindestens **4 GB RAM** und **2-4 vCPU**; produktiv eher 8 GB+ RAM.
 - Genug Speicherplatz in `data/` (Repos, LFS, Container-Registry-Daten etc.).
 - **Reverse Proxy** ueber die Synology Application "Reverse Proxy" (DSM) oder NPM auf einer anderen Maschine. TLS-Termination erfolgt dort.
 - DNS-Eintrag fuer den GitLab-FQDN (z. B. `gitlab.example.tld`) auf eine oeffentliche IP, Port-Forwarding 80/443 im Router.
 
-## Netzwerk anlegen (macvlan, /24)
+## Netzwerk
 
-Auf Synology Container Manager ist `ipvlan` oft instabil und schlaegt mit
-`failed to create the ipvlan port: operation not supported` fehl. Daher wird
-`macvlan` empfohlen — Compose-File bleibt identisch, nur der Treiber beim
-Anlegen des Netzes aendert sich.
-
-**Wichtig**: Das Gateway muss innerhalb des gewaehlten Subnetzes liegen.
-Da das Heimnetz typischerweise `192.168.178.0/24` ist, wird das macvlan-Netz
-ebenfalls als `/24` angelegt, damit der echte Router als Gateway dient:
-
-```bash
-docker network create \
-  --driver macvlan \
-  --subnet 192.168.178.0/24 \
-  --gateway 192.168.178.1 \
-  --ip-range=192.168.178.160/27 \
-  -o parent=eth0 \
-  dockhand_macvlan
-```
-
-Den Wert fuer `parent=eth0` an das echte Interface anpassen
-(`ip -br addr show` — oft `eth0`, `ovs_eth0` oder `bond0`).
-
-## macvlan-Hinweise
-
-- `GITLAB_IPV4` MUSS:
-  - innerhalb des im Netz konfigurierten Subnetzes liegen,
-  - **ausserhalb** des DHCP-Bereichs des Routers (statisch vergeben).
-  - Beispiel: bei DHCP-Range `.2` - `.199` bietet sich `GITLAB_IPV4=192.168.178.200` an.
-- macvlan-Container koennen das **Gateway ueblicherweise nicht direkt erreichen**
-  (Layer-2-Isolation). Fuer ausgehende Verbindungen (z. B. SMTP, GitLab-Update)
-  ggf. ein zweites Bridge-Netz ergaenzen.
+- `gitlab-bridge` (Bridge): GitLab hoert auf den Host-Ports `GITLAB_SSH_HOST_PORT` (Container 22), `GITLAB_HTTP_HOST_PORT` (Container 80), `GITLAB_HTTPS_HOST_PORT` (Container 443). Der Synology Reverse Proxy spricht GitLab ueber `http://127.0.0.1:${GITLAB_HTTP_HOST_PORT}` an.
+- `gitlab-internal` (Bridge, ohne externe Erreichbarkeit): nur fuer die Kommunikation GitLab <-> Runner. Runner registriert sich ueber `http://gitlab` (Service-Name im internen Netz).
+- Es ist **kein** externes Netzwerk oder IPvlan/macvlan noetig.
 
 ## First-Run Checkliste
 
@@ -72,25 +44,24 @@ Den Wert fuer `parent=eth0` an das echte Interface anpassen
 2. Folgende Werte in `.env` setzen:
    - `GITLAB_EXTERNAL_URL`: `https://<dein-fqdn>` (z. B. `https://gitlab.example.tld`).
    - `GITLAB_HOSTNAME`: gleicher FQDN.
-   - `GITLAB_IPV4`: freie, statische IP aus dem `dockhand_macvlan`-Subnetz (ausserhalb DHCP).
    - `GITLAB_EMAIL_FROM`: Absender fuer System-Mails.
-   - `GITLAB_SSH_PORT`: ein Port ungleich 22 (Synology belegt 22). Empfehlung: `2222`.
+   - `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT`: Host-Ports. Standard `2222`, `8080`, `8443`. Bei Port-Kollisionen anpassen.
 3. Synology **Reverse Proxy** anlegen (siehe unten).
-4. Firewall der Synology: Port `GITLAB_SSH_PORT` und (intern) Zugriff vom Reverse-Proxy auf `GITLAB_IPV4:80` erlauben.
+4. Firewall der Synology: Host-Ports `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT` freigeben.
 5. Optional SMTP-Block in `GITLAB_OMNIBUS_CONFIG` einkommentieren und Werte setzen.
 6. Stack starten — **Initial-Start dauert 3-10 Minuten**.
 
 ## Wichtige `.env` Einstellungen
 
-In `.env` stehen ausschliesslich die **pro Deployment anzupassenden, host-spezifischen** Werte. Image-Tags, Container-Namen, `shm_size` und Netzwerknamen sind fest in `docker-compose.yml` hinterlegt.
+In `.env` stehen ausschliesslich die **pro Deployment anzupassenden, host-spezifischen** Werte. Image-Tags, Container-Namen und `shm_size` sind fest in `docker-compose.yml` hinterlegt.
 
 - `GITLAB_EXTERNAL_URL`: `https://<fqdn>` — wird fuer Clone-URLs und Web-Links genutzt.
 - `GITLAB_HOSTNAME`: interner Hostname des Containers, meist identisch mit FQDN.
-- `GITLAB_IPV4`: statische IPv4 aus dem `dockhand_macvlan`-Subnetz (muss ausserhalb DHCP).
 - `GITLAB_EMAIL_FROM`: Absender fuer System-Mails.
-- `GITLAB_SSH_PORT`: SSH-Container-Port (nicht 22 waehlen, Synology belegt ihn).
-
-Hinweis: Subnetz, Gateway und Parent-Interface sind **nicht** in `.env`, sondern direkt im `dockhand_macvlan`-Netzwerk auf dem Docker-Host hinterlegt.
+- `GITLAB_BRIDGE_NETWORK_NAME`: Name des Bridge-Netzes (Default: `gitlab-bridge`).
+- `GITLAB_SSH_HOST_PORT`: Host-Port, ueber den SSH-Clients GitLab erreichen (Default: `2222`). Wird intern auch fuer `gitlab_shell_ssh_port` verwendet, sodass Clone-URLs korrekt angezeigt werden.
+- `GITLAB_HTTP_HOST_PORT`: Host-Port fuer HTTP (Default: `8080`). Wird vom Synology Reverse Proxy angesprochen.
+- `GITLAB_HTTPS_HOST_PORT`: Host-Port fuer HTTPS (Default: `8443`).
 
 ## Im Compose festgelegte Defaults
 
@@ -104,16 +75,16 @@ In der **DSM-Systemsteuerung -> Anmeldeportal -> Erweitert -> Reverse Proxy**:
 
 1. **Regel anlegen**:
    - Quelle: `https://gitlab.example.tld` Port `443`
-   - Ziel: `http://<GITLAB_IPV4>` Port `80`
+   - Ziel: `http://127.0.0.1` Port `8080` (entspricht `GITLAB_HTTP_HOST_PORT`)
    - Haken bei "HSTS" und "HTTP/2"
 
 2. **WebSocket-Unterstuetzung** aktivieren, da GitLab WebSockets fuer Live-Updates, Terminal etc. verwendet.
 
 3. **Zertifikat**: In DSM -> Systemsteuerung -> Sicherheit -> Zertifikat ein passendes Let's-Encrypt-Zertifikat fuer den FQDN hinterlegen und der Reverse-Proxy-Regel zuweisen.
 
-4. **SSH-Port (`GITLAB_SSH_PORT`)**: Im Router zur Synology weiterleiten. GitLab-Container hoert intern auf 22 und ist ueber `GITLAB_IPV4:22` erreichbar.
+4. **SSH-Port (`GITLAB_SSH_HOST_PORT`)**: Im Router zur Synology weiterleiten. GitLab lauscht intern immer auf Container-Port 22 — der konfigurierbare Host-Port wird in den Clone-URLs automatisch uebernommen.
 
-**Wichtig**: GitLab NGINX hoert im Container **nur** auf `GITLAB_IPV4` (siehe `nginx['listen_addresses']` in `docker-compose.yml`). Der Reverse-Proxy muss daher zwingend diese IP ansprechen.
+**Wichtig**: Der Reverse-Proxy spricht GitLab ueber `127.0.0.1:${GITLAB_HTTP_HOST_PORT}` an (Standard `8080`). Bei Aenderung von `GITLAB_HTTP_HOST_PORT` die Reverse-Proxy-Regel mit anpassen.
 
 ## Starten
 
@@ -206,14 +177,15 @@ docker exec -it gitlab-runner gitlab-runner register \
 
 Hinweise:
 - `--url` zeigt auf den internen DNS-Namen `gitlab` im Compose-Netz. Die externe FQDN ist hier **nicht** noetig.
-- Der Runner laeuft im Bridge-Netz `gitlab-internal` und kann den GitLab-Server ueber `http://gitlab` erreichen.
+- Der Runner laeuft im internen Bridge-Netz `gitlab-internal` und kann den GitLab-Server ueber `http://gitlab` erreichen.
 - Tags/Executor je nach Use-Case anpassen.
 
 ## Zugriff
 
 - Web-UI: `https://<dein-fqdn>` (ueber Synology Reverse Proxy)
 - Git ueber HTTP(S): `https://<dein-fqdn>/<group>/<project>.git`
-- Git ueber SSH: `ssh://git@<dein-fqdn>:<GITLAB_SSH_PORT>/<group>/<project>.git`
+- Git ueber SSH: `ssh://git@<dein-fqdn>:<GITLAB_SSH_HOST_PORT>/<group>/<project>.git`
+- Direkt auf der Synology (z. B. zu Testzwecken): `http://127.0.0.1:${GITLAB_HTTP_HOST_PORT}`
 - Initiales root-Passwort aus dem Container auslesen:
 
 ```bash

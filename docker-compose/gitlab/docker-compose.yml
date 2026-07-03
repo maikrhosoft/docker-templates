@@ -6,18 +6,18 @@ services:
     hostname: ${GITLAB_HOSTNAME}
     restart: unless-stopped
     shm_size: 256m
+    ports:
+      - "${GITLAB_SSH_HOST_PORT}:22"
+      - "${GITLAB_HTTP_HOST_PORT}:80"
+      - "${GITLAB_HTTPS_HOST_PORT}:443"
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url "${GITLAB_EXTERNAL_URL}"
         # Absender fuer System-Mails (Notifications, Passwort-Resets etc.)
         gitlab_rails['gitlab_email_from'] = "${GITLAB_EMAIL_FROM}"
-        # SSH-Container-Port, muss mit GITLAB_SSH_PORT uebereinstimmen
-        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT}
-        # NGINX hoert nur auf der IPvlan-IP, damit Port 80 auf dem Host nicht
-        # kollidiert und GitLab nicht auf 0.0.0.0 lauscht.
-        nginx['listen_addresses'] = ['${GITLAB_IPV4}']
-        # Optional: NGINX auch ueber IPv6 erreichbar machen
-        # nginx['listen_addresses'] = ['${GITLAB_IPV4}', '[::]']
+        # GitLab-Shell-SSH-Port (fuer Clone-URLs und Web-UI-Anzeige)
+        # entspricht dem Host-Port, unter dem SSH erreichbar ist.
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_HOST_PORT}
         # Eigene SMTP-Einstellungen hier eintragen (Beispiel):
         # gitlab_rails['smtp_enable'] = true
         # gitlab_rails['smtp_address'] = "smtp.example.com"
@@ -38,9 +38,8 @@ services:
       - ./data:/var/opt/gitlab
       - ./backups:/var/opt/gitlab/backups
     networks:
-      dockhand_macvlan:
-        ipv4_address: ${GITLAB_IPV4}
-      gitlab-internal:
+      - gitlab-bridge
+      - gitlab-internal
 
   gitlab-runner:
     image: gitlab/gitlab-runner:alpine-v17.9.1
@@ -55,25 +54,11 @@ services:
       - gitlab-internal
 
 networks:
-  # Externes Netz "dockhand_macvlan" - auf dem Docker-Host angelegt.
-  # Auf Synology Container Manager laeuft es in der Regel als macvlan,
-  # weil ipvlan auf dem Parent-Interface haeufig mit "operation not supported"
-  # fehlschlaegt. Der Treiber wird beim Anlegen des Netzes festgelegt:
-  #
-  #   docker network create \
-  #     --driver macvlan \
-  #     --subnet 192.168.178.0/24 \
-  #     --gateway 192.168.178.1 \
-  #     -o parent=eth0 \
-  #     dockhand_macvlan
-  #
-  # (parent=eth0 ggf. durch das echte Interface ersetzen, z. B. ovs_eth0)
-  #
-  # Hinweis: Das Gateway MUSS innerhalb des Subnetzes liegen. Mit /24 ist
-  # das gesamte Heimnetz abgedeckt, sodass der echte Router als Gateway
-  # funktioniert. Die IP des Containers muss dann ausserhalb des
-  # DHCP-Bereichs des Routers gewaehlt werden (siehe GITLAB_IPV4 in .env).
-  dockhand_macvlan:
-    external: true
-  # Internes Bridge-Netz fuer GitLab <-> Runner.
+  # Bridge-Netz mit Host-Port-Binding fuer GitLab (HTTP/HTTPS/SSH).
+  # Der Synology-Reverse-Proxy spricht GitLab ueber diese Ports an.
+  gitlab-bridge:
+    name: ${GITLAB_BRIDGE_NETWORK_NAME}
+  # Internes Bridge-Netz nur fuer GitLab <-> Runner-Kommunikation.
+  # Runner hat hier keinen Host-Port, sondern erreicht GitLab ueber den
+  # Compose-internen DNS-Namen "gitlab" auf Port 80.
   gitlab-internal:
