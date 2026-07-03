@@ -38,7 +38,7 @@ services:
       - ./data:/var/opt/gitlab
       - ./backups:/var/opt/gitlab/backups
     networks:
-      dockhand_ipvlan:
+      dockhand_macvlan:
         ipv4_address: ${GITLAB_IPV4}
       gitlab-internal:
 
@@ -55,9 +55,25 @@ services:
       - gitlab-internal
 
 networks:
-  # Externes IPvlan-Netz "dockhand_ipvlan" - auf dem Docker-Host angelegt
-  # (Subnetz, Gateway, Parent-Interface sind dort konfiguriert).
-  dockhand_ipvlan:
+  # Externes Netz "dockhand_macvlan" - auf dem Docker-Host angelegt.
+  # Auf Synology Container Manager laeuft es in der Regel als macvlan,
+  # weil ipvlan auf dem Parent-Interface haeufig mit "operation not supported"
+  # fehlschlaegt. Der Treiber wird beim Anlegen des Netzes festgelegt:
+  #
+  #   docker network create \
+  #     --driver macvlan \
+  #     --subnet 192.168.178.0/24 \
+  #     --gateway 192.168.178.1 \
+  #     -o parent=eth0 \
+  #     dockhand_macvlan
+  #
+  # (parent=eth0 ggf. durch das echte Interface ersetzen, z. B. ovs_eth0)
+  #
+  # Hinweis: Das Gateway MUSS innerhalb des Subnetzes liegen. Mit /24 ist
+  # das gesamte Heimnetz abgedeckt, sodass der echte Router als Gateway
+  # funktioniert. Die IP des Containers muss dann ausserhalb des
+  # DHCP-Bereichs des Routers gewaehlt werden (siehe GITLAB_IPV4 in .env).
+  dockhand_macvlan:
     external: true
   # Internes Bridge-Netz fuer GitLab <-> Runner.
   gitlab-internal:

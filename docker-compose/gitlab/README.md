@@ -4,7 +4,7 @@ Docker-Compose-Template fuer selbstgehostetes GitLab CE im **IPvlan** mit Synolo
 
 ## Was der Stack macht
 
-- **gitlab** haengt mit einer festen IP im Heimnetz (IPvlan `dockhand_ipvlan`) und ist ueber die Synology Reverse Proxy per FQDN erreichbar.
+- **gitlab** haengt mit einer festen IP im Heimnetz (macvlan `dockhand_macvlan`) und ist ueber die Synology Reverse Proxy per FQDN erreichbar.
 - **gitlab-runner** laeuft in einem internen Bridge-Netz, das nur fuer die Kommunikation mit GitLab verwendet wird. Er holt CI/CD-Jobs ueber den Compose-internen DNS-Namen `gitlab` ab.
 
 ## Verzeichnisstruktur
@@ -26,19 +26,45 @@ gitlab/
 ## Voraussetzungen
 
 - Docker + Compose Plugin auf der Synology (Container Manager) installiert.
-- Externes Netzwerk `dockhand_ipvlan` als **IPvlan-/Macvlan-Netz** angelegt, Subnetz `192.168.178.160/27`, Gateway = Router (z. B. `192.168.178.1`).
+- Externes Netzwerk `dockhand_macvlan` als macvlan angelegt, Subnetz = Heimnetz, Gateway = Router (z. B. `192.168.178.1`).
 - Genug Ressourcen: GitLab CE benoetigt mindestens **4 GB RAM** und **2-4 vCPU**; produktiv eher 8 GB+ RAM.
 - Genug Speicherplatz in `data/` (Repos, LFS, Container-Registry-Daten etc.).
 - **Reverse Proxy** ueber die Synology Application "Reverse Proxy" (DSM) oder NPM auf einer anderen Maschine. TLS-Termination erfolgt dort.
 - DNS-Eintrag fuer den GitLab-FQDN (z. B. `gitlab.example.tld`) auf eine oeffentliche IP, Port-Forwarding 80/443 im Router.
 
-## IPvlan-Hinweise
+## Netzwerk anlegen (macvlan, /24)
 
-- Das `dockhand_ipvlan`-Netz (Subnetz, Gateway, Parent-Interface) ist auf dem Docker-Host angelegt und wird im Compose-File per `external: true` referenziert.
+Auf Synology Container Manager ist `ipvlan` oft instabil und schlaegt mit
+`failed to create the ipvlan port: operation not supported` fehl. Daher wird
+`macvlan` empfohlen — Compose-File bleibt identisch, nur der Treiber beim
+Anlegen des Netzes aendert sich.
+
+**Wichtig**: Das Gateway muss innerhalb des gewaehlten Subnetzes liegen.
+Da das Heimnetz typischerweise `192.168.178.0/24` ist, wird das macvlan-Netz
+ebenfalls als `/24` angelegt, damit der echte Router als Gateway dient:
+
+```bash
+docker network create \
+  --driver macvlan \
+  --subnet 192.168.178.0/24 \
+  --gateway 192.168.178.1 \
+  --ip-range=192.168.178.160/27 \
+  -o parent=eth0 \
+  dockhand_macvlan
+```
+
+Den Wert fuer `parent=eth0` an das echte Interface anpassen
+(`ip -br addr show` — oft `eth0`, `ovs_eth0` oder `bond0`).
+
+## macvlan-Hinweise
+
 - `GITLAB_IPV4` MUSS:
   - innerhalb des im Netz konfigurierten Subnetzes liegen,
   - **ausserhalb** des DHCP-Bereichs des Routers (statisch vergeben).
-- IPvlan-Container koennen das **Gateway ueblicherweise nicht direkt erreichen** (je nach Treiber-Modus `l2`/`l3`). Fuer ausgehende Verbindungen (z. B. SMTP, GitLab-Update) ggf. ein zweites Bridge-Netz ergaenzen, falls Probleme auftreten.
+  - Beispiel: bei DHCP-Range `.2` - `.199` bietet sich `GITLAB_IPV4=192.168.178.200` an.
+- macvlan-Container koennen das **Gateway ueblicherweise nicht direkt erreichen**
+  (Layer-2-Isolation). Fuer ausgehende Verbindungen (z. B. SMTP, GitLab-Update)
+  ggf. ein zweites Bridge-Netz ergaenzen.
 
 ## First-Run Checkliste
 
@@ -46,7 +72,7 @@ gitlab/
 2. Folgende Werte in `.env` setzen:
    - `GITLAB_EXTERNAL_URL`: `https://<dein-fqdn>` (z. B. `https://gitlab.example.tld`).
    - `GITLAB_HOSTNAME`: gleicher FQDN.
-   - `GITLAB_IPV4`: freie, statische IP aus dem `dockhand_ipvlan`-Subnetz (ausserhalb DHCP).
+   - `GITLAB_IPV4`: freie, statische IP aus dem `dockhand_macvlan`-Subnetz (ausserhalb DHCP).
    - `GITLAB_EMAIL_FROM`: Absender fuer System-Mails.
    - `GITLAB_SSH_PORT`: ein Port ungleich 22 (Synology belegt 22). Empfehlung: `2222`.
 3. Synology **Reverse Proxy** anlegen (siehe unten).
@@ -60,11 +86,11 @@ In `.env` stehen ausschliesslich die **pro Deployment anzupassenden, host-spezif
 
 - `GITLAB_EXTERNAL_URL`: `https://<fqdn>` — wird fuer Clone-URLs und Web-Links genutzt.
 - `GITLAB_HOSTNAME`: interner Hostname des Containers, meist identisch mit FQDN.
-- `GITLAB_IPV4`: statische IPv4 aus dem `dockhand_ipvlan`-Subnetz (muss ausserhalb DHCP).
+- `GITLAB_IPV4`: statische IPv4 aus dem `dockhand_macvlan`-Subnetz (muss ausserhalb DHCP).
 - `GITLAB_EMAIL_FROM`: Absender fuer System-Mails.
 - `GITLAB_SSH_PORT`: SSH-Container-Port (nicht 22 waehlen, Synology belegt ihn).
 
-Hinweis: Subnetz, Gateway und Parent-Interface sind **nicht** in `.env`, sondern direkt im `dockhand_ipvlan`-Netzwerk auf dem Docker-Host hinterlegt.
+Hinweis: Subnetz, Gateway und Parent-Interface sind **nicht** in `.env`, sondern direkt im `dockhand_macvlan`-Netzwerk auf dem Docker-Host hinterlegt.
 
 ## Im Compose festgelegte Defaults
 
