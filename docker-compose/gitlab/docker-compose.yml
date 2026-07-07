@@ -29,10 +29,10 @@ services:
       - gitlab-bridge
       - gitlab-internal
     healthcheck:
-      test: ["CMD-SHELL", "gitlab-ctl status >/dev/null 2>&1 && curl -fsS http://127.0.0.1/-/readiness | grep -q 'GitLab' || exit 1"]
-      interval: 60s
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/-/readiness || exit 1"]
+      interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
       start_period: 600s
 
   gitlab-runner:
