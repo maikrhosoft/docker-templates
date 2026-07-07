@@ -28,16 +28,35 @@ services:
     networks:
       - gitlab-bridge
       - gitlab-internal
+    healthcheck:
+      test: ["CMD-SHELL", "gitlab-ctl status >/dev/null 2>&1 && curl -fsS http://127.0.0.1/-/readiness | grep -q 'GitLab' || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
 
   gitlab-runner:
     image: gitlab/gitlab-runner:alpine-v19.1.1
     container_name: gitlab-runner
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     depends_on:
-      - gitlab
+      gitlab:
+        condition: service_healthy
     volumes:
       - ./runner/config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      CI_SERVER_URL: ${GITLAB_INTERNAL_URL}
+      REGISTRATION_TOKEN: ${GITLAB_RUNNER_TOKEN}
+      RUNNER_EXECUTOR: docker
+      RUNNER_DESCRIPTION: docker-runner
+      RUNNER_TAG_LIST: docker
+      DOCKER_IMAGE: docker:24
+      DOCKER_PRIVILEGED: "false"
+      DOCKER_VOLUMES: /var/run/docker.sock:/var/run/docker.sock
+      RUNNER_RUN_UNTAGGED: "false"
     networks:
       - gitlab-internal
 

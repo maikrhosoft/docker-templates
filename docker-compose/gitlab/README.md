@@ -46,6 +46,11 @@ gitlab/
    - `GITLAB_HOSTNAME`: gleicher FQDN.
    - `GITLAB_EMAIL_FROM`: Absender fuer System-Mails.
    - `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT`: Host-Ports. Standard `2222`, `8080`, `8443`. Bei Port-Kollisionen anpassen.
+   - `GITLAB_RUNNER_TOKEN`: Registration-Token aus der GitLab Web-UI
+     (Admin -> CI/CD -> Runners -> "New instance runner" -> Token kopieren).
+     **Muss vor dem ersten Start gesetzt sein**, sonst schlaegt Autoregister fehl.
+   - `GITLAB_INTERNAL_URL`: interner URL (Default `http://gitlab`, nur aendern wenn
+     der Service-Name im Compose-Netz abweicht).
 3. Synology **Reverse Proxy** anlegen (siehe unten).
 4. Firewall der Synology: Host-Ports `GITLAB_SSH_HOST_PORT`, `GITLAB_HTTP_HOST_PORT`, `GITLAB_HTTPS_HOST_PORT` freigeben.
 5. Optionale Konfigurationen (SMTP etc.) koennen nach dem Start ueber `gitlab-rails console` oder eine lokale `config/gitlab.rb` gesetzt werden (siehe unten).
@@ -62,10 +67,12 @@ In `.env` stehen ausschliesslich die **pro Deployment anzupassenden, host-spezif
 - `GITLAB_SSH_HOST_PORT`: Host-Port, ueber den SSH-Clients GitLab erreichen (Default: `2222`). Wird intern auch fuer `gitlab_shell_ssh_port` verwendet, sodass Clone-URLs korrekt angezeigt werden.
 - `GITLAB_HTTP_HOST_PORT`: Host-Port fuer HTTP (Default: `8080`). Wird vom Synology Reverse Proxy angesprochen.
 - `GITLAB_HTTPS_HOST_PORT`: Host-Port fuer HTTPS (Default: `8443`).
+- `GITLAB_RUNNER_TOKEN`: Registration-Token fuer den GitLab-Runner (Autoregister beim Container-Start). Quelle: GitLab Web-UI -> Admin -> CI/CD -> Runners -> "New instance runner".
+- `GITLAB_INTERNAL_URL`: interne URL, mit der sich der Runner bei GitLab registriert. Default `http://gitlab` (Compose-DNS-Name). Nur aendern, wenn der `gitlab`-Service umbenannt wird.
 
 ## Im Compose festgelegte Defaults
 
-- `gitlab/gitlab-ce:17.9.1-ce.0` und `gitlab/gitlab-runner:alpine-v17.9.1` (Minor-Version gepinnt)
+- `gitlab/gitlab-ce:19.1.1-ce.0` und `gitlab/gitlab-runner:alpine-v19.1.1` (Minor-Version gepinnt)
 - Container-Namen: `gitlab` und `gitlab-runner`
 - `shm_size: 256m` (GitLab-Empfehlung)
 
@@ -219,30 +226,95 @@ Diese Verzeichnisse regelmaessig sichern:
 - `backups/`
 - `runner/config/`
 
-## GitLab Runner registrieren
+## GitLab Runner registrieren (Autoregister)
 
-1. In GitLab als Admin: `Admin -> CI/CD -> Runners -> New project runner` (oder Instance-Runner) anlegen.
-2. Registrierungstoken kopieren.
-3. Runner registrieren (intern ueber Compose-DNS):
+Der Runner registriert sich beim ersten Start des `gitlab-runner`-Containers
+automatisch ueber den im `gitlab/gitlab-runner:alpine`-Image eingebauten
+Autoregister-Mechanismus. Voraussetzungen:
+
+1. In GitLab Web-UI als Admin: `Admin -> CI/CD -> Runners -> "New instance runner"`
+   anlegen und den Registration-Token kopieren.
+2. In `.env` den kopierten Token als `GITLAB_RUNNER_TOKEN` eintragen.
+3. `docker compose up -d` startet den Runner erst, wenn GitLab `healthy` ist
+   (siehe Healthcheck auf `/-/readiness`). Die Registrierung laeuft automatisch
+   im Entrypoint des Runner-Containers.
+
+Pruefen:
 
 ```bash
-docker exec -it gitlab-runner gitlab-runner register \
-  --non-interactive \
-  --url "http://gitlab" \
-  --registration-token "<TOKEN>" \
-  --executor "docker" \
-  --docker-image "docker:24" \
-  --docker-privileged=false \
-  --docker-volumes "/var/run/docker.sock:/var/run/docker.sock" \
-  --description "docker-runner" \
-  --tag-list "docker" \
-  --run-untagged=false
+docker exec gitlab-runner cat /etc/gitlab-runner/config.toml
+# Erwartet: einen [[runners]]-Block mit url = "http://gitlab" und
+# einem Runner-Token (nicht identisch mit dem Registration-Token).
 ```
 
-Hinweise:
-- `--url` zeigt auf den internen DNS-Namen `gitlab` im Compose-Netz. Die externe FQDN ist hier **nicht** noetig.
-- Der Runner laeuft im internen Bridge-Netz `gitlab-internal` und kann den GitLab-Server ueber `http://gitlab` erreichen.
-- Tags/Executor je nach Use-Case anpassen.
+In der Web-UI unter `Admin -> CI/CD -> Runners` muss der Runner als
+**online** markiert sein.
+
+### Token rotieren
+
+Bei Token-Wechsel (z. B. nach Sicherheitsvorfall) manuell in **beiden Welten**:
+
+**A) In der GitLab Web-UI** (VOR den Runner-Schritten):
+
+1. `Admin -> CI/CD -> Runners` oeffnen.
+2. Alten Runner-Eintrag loeschen oder deaktivieren (damit ein kompromittierter
+   Token keine weiteren Runner mehr registrieren kann).
+3. Neuen Registration-Token generieren (`Reset registration token` bzw. neuen
+   "instance runner" anlegen).
+
+**B) Auf dem Host** (Runner-Seite):
+
+1. `docker compose down gitlab-runner`
+2. `rm -f runner/config/config.toml`
+3. Neues `GITLAB_RUNNER_TOKEN` in `.env` eintragen.
+4. `docker compose up -d gitlab-runner`
+
+Der Runner fuehrt Autoregister mit dem neuen Token aus.
+
+### Konfiguration anpassen (Tags, Executor, Image)
+
+Defaults aus `docker-compose.yml` (Env-Block `gitlab-runner`):
+
+- Executor: `docker`, Image: `docker:24`
+- Description: `docker-runner`, Tags: `docker`
+- Run untagged: `false`, Privileged: `false`
+- Volumes: `/var/run/docker.sock:/var/run/docker.sock`
+- Hardening: `security_opt: ["no-new-privileges:true"]` (verhindert, dass der
+  Runner oder seine Kinder neue Privilegien via SUID-Binaries erhalten)
+- Runner-Typ: Instance-Runner (`RUNNER_LOCKED: "false"`) — kann von allen
+  Projekten der Instanz genutzt werden.
+
+Fuer andere Werte die entsprechenden `RUNNER_*` / `DOCKER_*` Variablen in
+`docker-compose.yml` anpassen. Eine vollstaendige Liste liefert
+https://docs.gitlab.com/runner/register/#run-registrator-container.
+
+### Sicherheitshinweis: docker.sock in Job-Containern
+
+Der Runner nutzt den Docker-Executor und gibt `/var/run/docker.sock` des Hosts
+an **jeden Job-Container** weiter. Damit hat Code, der in einem CI-Job laeuft,
+effektiv Root-Zugriff auf den Docker-Host (und damit auf die Synology).
+
+Konsequenzen:
+
+- **Keine Pipelines fuer Forks** oeffentlicher Repos aktivieren.
+- CI-Jobs nur als vertrauenswuerdig einstufen (gepflegte Dependencies, reviewte
+  `.gitlab-ci.yml`-Aenderungen).
+- Keine Secrets, Host-Pfade oder persoenliche Daten ueber Job-Container
+  exponieren, die nicht ohnehin auf dem Host liegen.
+
+Eine Alternative mit haerterer Isolation waere der Wechsel auf den
+`docker-in-docker` (`docker:dind`) Executor mit TLS — Aufwand, nur bei
+mehreren Projekten oder geteilten Runners noetig.
+
+### Troubleshooting: Runner startet nicht
+
+Falls `gitlab-runner` dauerhaft im Status `starting` oder `waiting` bleibt,
+pruefen:
+
+- `docker logs gitlab` — Readiness-Healthcheck aktiv? (`/-/readiness` muss 200 liefern.)
+- Falls die Erstmigration auf der Ziel-Hardware laenger als 10 min dauert,
+  `start_period` im `gitlab`-Healthcheck der `docker-compose.yml` temporaer
+  erhoehen.
 
 ## Zugriff
 
