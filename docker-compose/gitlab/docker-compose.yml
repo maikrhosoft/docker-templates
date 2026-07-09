@@ -28,12 +28,6 @@ services:
     networks:
       - gitlab-bridge
       - gitlab-internal
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/-/readiness || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 600s
 
   gitlab-runner:
     image: gitlab/gitlab-runner:alpine-v19.1.1
@@ -42,8 +36,7 @@ services:
     security_opt:
       - "no-new-privileges:true"
     depends_on:
-      gitlab:
-        condition: service_healthy
+      - gitlab
     volumes:
       - ./runner/config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock

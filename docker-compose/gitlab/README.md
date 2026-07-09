@@ -308,13 +308,49 @@ mehreren Projekten oder geteilten Runners noetig.
 
 ### Troubleshooting: Runner startet nicht
 
-Falls `gitlab-runner` dauerhaft im Status `starting` oder `waiting` bleibt,
-pruefen:
+**Hinweis**: Im aktuellen Stand ist der `healthcheck` am `gitlab`-Service und
+`depends_on: condition: service_healthy` am Runner **bewusst deaktiviert**, um
+das Debugging zu vereinfachen. Der Runner startet sofort mit GitLab zusammen,
+auch wenn GitLab noch nicht 100% ready ist. Spaeter wieder einschalten
+(siehe "Healthcheck wieder aktivieren" unten).
 
-- `docker logs gitlab` — Readiness-Healthcheck aktiv? (`/-/readiness` muss 200 liefern.)
-- Falls die Erstmigration auf der Ziel-Hardware laenger als 10 min dauert,
-  `start_period` im `gitlab`-Healthcheck der `docker-compose.yml` temporaer
-  erhoehen.
+**Typisches Symptom im Runner-Log**:
+
+```
+ERROR: Failed to load config stat /etc/gitlab-runner/config.toml: no such file or directory
+```
+
+Bedeutet: der Entrypoint des Runner-Images hat den `register`-Schritt
+uebersprungen. Drei Ursachen, in dieser Reihenfolge pruefen:
+
+1. **`GITLAB_RUNNER_TOKEN` in `.env` ist leer oder der Platzhalter aus
+   `.env.example`** (Wert `glrt-XXX...`). Echten Token aus GitLab Web-UI
+   holen (`Admin -> CI/CD -> Runners -> "Register an instance runner"`) und
+   in `.env` eintragen.
+2. **GitLab war beim Runner-Start noch nicht bereit** (Puma/Sidekiq noch
+   nicht hochgefahren). Loesung: entweder `docker compose restart gitlab-runner`
+   nach ~5 min, oder den Healthcheck wieder aktivieren (unten).
+3. **DNS-Problem**: der Runner kann den Service `gitlab` im internen Netz
+   nicht aufloesen. Pruefen mit:
+   `docker exec gitlab-runner wget -qO- http://gitlab/-/readiness`.
+   Falls fail: `docker compose down && docker network prune && docker compose up -d`.
+
+#### Healthcheck wieder aktivieren
+
+Sobald das eigentliche Problem geloest ist, in `docker-compose.yml` zurueck
+bauen auf den vollen Stand:
+
+- Im `gitlab`-Service einen `healthcheck:`-Block hinzufuegen (siehe
+  Git-History / vorherige Version).
+- Im `gitlab-runner`-Service `depends_on` auf die Langform setzen:
+  ```yaml
+  depends_on:
+    gitlab:
+      condition: service_healthy
+  ```
+
+Dann startet der Runner erst, wenn GitLab tatsaechlich `/-/readiness` mit
+HTTP 200 liefert.
 
 ## Zugriff
 
