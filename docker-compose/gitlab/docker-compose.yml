@@ -39,6 +39,7 @@ services:
       - gitlab
     volumes:
       - ./runner/config:/etc/gitlab-runner
+      - ./runner/config/certs/ca.crt:/etc/gitlab-runner/certs/ca.crt:ro
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       CI_SERVER_URL: ${GITLAB_INTERNAL_URL}
