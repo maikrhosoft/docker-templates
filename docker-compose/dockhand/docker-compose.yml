@@ -1,0 +1,61 @@
+# Docker-Compose fuer Dockhand (fnsys/dockhand).
+# Laeuft sowohl im Docker Swarm (deploy:-Block) als auch lokal mit
+# `docker compose up` (deploy:-Block wird ignoriert).
+# Traefik-Labels sind additiv: ohne laufenden Traefik-Stack inert.
+
+services:
+
+  dockhand:
+    image: fnsys/dockhand:${DOCKHAND_IMAGE_TAG}
+    container_name: dockhand
+    restart: unless-stopped
+    ports:
+      # Host-Port konfigurierbar, Container laeuft auf 3000.
+      - "${DOCKHAND_HOST_PORT}:3000"
+    volumes:
+      # Persistente Anwendungsdaten (Bind-Mount, host-agnostisch).
+      - ./data:/app/data
+      # Docker-Socket: gibt dem Container vollen Root-Zugriff auf den
+      # Docker-Daemon. Siehe README "Sicherheitshinweis: Docker-Socket".
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      # Prueft den internen /health-Endpunkt der App ueber wget.
+      # User-verifiziert: der Endpunkt gibt eine Antwort.
+      # Voraussetzung: wget ist im Image vorhanden (Standard in den
+      # meisten Linux-basierten Images; bei distroless/scratch-Images
+      # ggf. durch `curl` ersetzen oder das Tool ueber ein eigenes
+      # Basis-Image nachinstallieren).
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dockhand.rule=Host(`dockhand.example.com`)"
+      - "traefik.http.routers.dockhand.entrypoints=websecure"
+      - "traefik.http.routers.dockhand.tls=true"
+      - "traefik.http.routers.dockhand.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dockhand.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"  # Required if container has multiple networks
+    networks:
+      - dockhand-internal
+      - proxy
+    deploy:
+      replicas: 1
+      # Docker-Socket verlangt Manager-Node.
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+
+networks:
+  # Internes Overlay-Netz fuer Dockhand -> wird im Stack vom Swarm angelegt.
+  dockhand-internal:
+    driver: overlay
+  # Externes Overlay-Netz, das Traefik bereitstellt. Muss vor
+  # `docker stack deploy` existieren: `docker network create --driver=overlay proxy`.
+  proxy:
+    external: true
+    name: proxy
