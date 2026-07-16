@@ -8,6 +8,7 @@ Sammlung von Docker-Compose-Templates fuer selbstgehostete Services (Schwerpunkt
 |-----------|----------------------------|------------|
 | GitLab CE | `docker-compose/gitlab/`   | verfuegbar |
 | Dockhand  | `docker-compose/dockhand/` | verfuegbar |
+| Pi-hole   | `docker-compose/pihole/`   | verfuegbar |
 
 ## Konventionen
 
