@@ -1,0 +1,41 @@
+# Swarm-Override fuer Pi-hole v6.
+# Wird zusaetzlich zum Base-File geladen, um den Stack im Docker Swarm
+# mit externem Traefik-Netz zu betreiben:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.swarm.yml up -d
+#
+# Im Standalone-Modus (nur Base-File) bleibt das proxy-Netz inaktiv und
+# Pi-hole laeuft rein ueber das interne Bridge-Netz.
+#
+# Voraussetzung fuer den Swarm-Pfad: das externe Overlay-Netz muss vor
+# dem Deploy existieren:
+#   docker network create --driver=overlay proxy
+
+services:
+  pihole:
+    # Traefik-Labels nur im Swarm-Override — das Base-File laeuft
+    # standalone ohne Traefik, damit eine echte Traefik-Instanz auf dem
+    # Host die Labels nicht versehentlich mitzieht.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pihole.rule=Host(`${PIHOLE_TRAEFIK_DOMAIN}`)"
+      - "traefik.http.routers.pihole.entrypoints=websecure"
+      - "traefik.http.routers.pihole.tls=true"
+      - "traefik.http.routers.pihole.tls.certresolver=letsencrypt"
+      - "traefik.http.services.pihole.loadbalancer.server.port=80"
+      - "traefik.docker.network=${PROXY_NETWORK_NAME}"
+    networks:
+      # Override: pihole-internal als Overlay + proxy als externes Netz.
+      - pihole-internal
+      - proxy
+
+networks:
+  # Im Swarm als Overlay anlegen (vom Stack verwaltet).
+  pihole-internal:
+    driver: overlay
+  # Externes Overlay-Netz, das Traefik bereitstellt. Muss vor
+  # `docker stack deploy` existieren:
+  # `docker network create --driver=overlay proxy`.
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK_NAME}

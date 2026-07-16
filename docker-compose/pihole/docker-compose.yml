@@ -1,0 +1,97 @@
+# Docker-Compose fuer Pi-hole v6.
+# Laeuft sowohl im Docker Swarm (deploy:-Block) als auch lokal mit
+# `docker compose up` (deploy:-Block wird ignoriert).
+# Traefik-Labels sind NUR im Swarm-Override (docker-compose.swarm.yml)
+# hinterlegt — das Base-File laeuft standalone ohne Traefik.
+#
+# WICHTIG: Port 53 (DNS) wird an 0.0.0.0 gebunden — Pi-hole ist damit
+# als DNS-Server im LAN nutzbar. Port 53 NICHT oeffentlich exponieren
+# (siehe README "Sicherheitshinweis: Port 53").
+
+services:
+
+  pihole:
+    image: pihole/pihole:${PIHOLE_IMAGE_TAG}
+    container_name: pihole
+    restart: unless-stopped
+    ports:
+      # DNS — an alle Interfaces (0.0.0.0), damit LAN-Clients Pi-hole
+      # als DNS-Server nutzen koennen. Host-Port fest 53 (DNS-Standard).
+      - "53:53/tcp"
+      - "53:53/udp"
+      # Web-UI — Host-Ports konfigurierbar (Default 8080/8443).
+      # Container laeuft intern auf 80 (HTTP) und 443 (FTL-self-signed-cert).
+      # Traefik spricht den Container ueber das proxy-Netz auf Port 80 an.
+      - "${PIHOLE_HOST_PORT_HTTP}:80/tcp"
+      # 443/tcp nur fuer den Direktzugriff auf das FTL-self-signed-Zertifikat
+      # ohne vorgeschalteten Traefik. Mit Traefik nicht noetig.
+      - "${PIHOLE_HOST_PORT_HTTPS}:443/tcp"
+    environment:
+      TZ: ${PIHOLE_TZ}
+      # Pi-hole v6: Passwort-Env heisst FTLCONF_webserver_api_password
+      # (NICHT WEBPASSWORD wie in v5 — WEBPASSWORD wird ignoriert).
+      FTLCONF_webserver_api_password: ${PIHOLE_WEBPASSWORD}
+      # An alle Interfaces lauschen, damit LAN-Clients DNS-Queries stellen
+      # koennen. Ohne diese Einstellung hoert Pi-hole nur auf den
+      # Container-internen Loopback.
+      FTLCONF_dns_listeningMode: "ALL"
+      # DNS-Rebind-Schutz aktivieren (v6-Default). Verhindert, dass
+      # private IP-Adressen in oeffentlichen DNS-Antworten aufgeloest
+      # werden. Die Traefik-Domain muss whitelistet werden, damit der
+      # Zugriff im LAN funktioniert (siehe README "Sicherheitshinweis:
+      # DNS-Rebind-Schutz"). PIHOLE_TRAEFIK_DOMAIN muss identisch mit
+      # der Host()-Rule im Traefik-Label sein.
+      FTLCONF_dns_rebind_protection: "true"
+      FTLCONF_dns_rebind_domains: ${PIHOLE_TRAEFIK_DOMAIN}
+    volumes:
+      # Persistente Pi-hole-Konfiguration und gravity.db.
+      # Enthaelt alle Blocklisten, Whitelists, DNS-Einstellungen.
+      - ./etc-pihole:/etc/pihole
+      # Hinweis: ./etc-dnsmasq.d:/etc/dnsmasq.d ist in v6 nicht mehr
+      # zwingend noetig. Fuer Power-User, die eigene dnsmasq-Konfig-
+      # Dateien einbinden wollen, kann dieser Mount manuell ergaenzt
+      # werden (siehe README "Optionaler dnsmasq.d-Mount"). Fuer eine
+      # v5->v6-Migration kann er temporaer hilfreich sein.
+      # - ./etc-dnsmasq.d:/etc/dnsmasq.d
+    # Capabilities: per Default KEINE, da FTL unprivilegiert laeuft.
+    # Bei Bedarf einen cap_add:-Block ergaenzen (siehe README
+    # "Sicherheitshinweis: Capabilities"):
+    #   cap_add:
+    #     - NET_ADMIN   # fuer DHCP-Betrieb (PIHOLE_ENABLE_DHCP=true)
+    #     - SYS_TIME    # fuer NTP-Client (PIHOLE_ENABLE_NTP=true)
+    #     - SYS_NICE    # optional, fuer hoehere DNS-Prioritaet
+    # Verhindert, dass Prozesse im Container ueber SUID-Bits oder setcap
+    # weitere Privilegien erlangen koennen (Defense-in-Depth).
+    security_opt:
+      - "no-new-privileges:true"
+    healthcheck:
+      # Prueft die Web-UI ueber wget auf Port 80. Ziel ist der status-
+      # Endpoint, der ohne Auth JSON liefert (stabiler als /admin/login).
+      # Voraussetzung: wget ist im Image vorhanden (Standard bei
+      # pihole/pihole). Bei distroless-Images auf curl umstellen.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/admin/api.php?status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels: []  # Traefik-Labels werden im Swarm-Override (docker-compose.swarm.yml) gesetzt.
+    networks:
+      # Nur das interne Netz im Base-File. Das externe Traefik-Netz
+      # `proxy` wird ausschliesslich im Swarm-Override
+      # docker-compose.swarm.yml hinzugefuegt. Damit ist das Base-File
+      # standalone-tauglich (kein externes Netz noetig).
+      - pihole-internal
+    deploy:
+      replicas: 1
+      # Kein Placement-Constraint: Pi-hole laeuft auf jedem Swarm-Node,
+      # der Port 53 frei hat (kein Docker-Socket noetig).
+      restart_policy:
+        condition: any
+
+networks:
+  # Internes Netz fuer Pi-hole. Im Base-File (Standalone-Default) als
+  # Bridge angelegt -> funktioniert out-of-the-box ohne Swarm und ohne
+  # externes Netz. Im Swarm-Override (docker-compose.swarm.yml) wird es
+  # auf driver: overlay umgestellt.
+  pihole-internal:
+    driver: bridge
